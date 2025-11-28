@@ -63,7 +63,8 @@ export async function sendDocument(chatId: number | string, document: DocumentPa
 
   const buffer =
     typeof document.content === 'string' ? Buffer.from(document.content, 'utf8') : document.content;
-  const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
+  new Uint8Array(arrayBuffer).set(buffer);
 
   const file = new File([arrayBuffer], document.filename, {
     type: document.contentType ?? 'application/octet-stream',
@@ -71,10 +72,14 @@ export async function sendDocument(chatId: number | string, document: DocumentPa
 
   form.append('document', file);
 
-  const response = await fetch(`${API_BASE}/sendDocument`, {
-    method: 'POST',
-    body: form,
-  });
+  const response = await fetch(
+    `${API_BASE}/sendDocument`,
+    {
+      method: 'POST',
+      // @ts-expect-error — use undici FormData/Blob/File at runtime; TS does not narrow BodyInit union cleanly
+      body: form,
+    },
+  );
 
   if (!response.ok) {
     const errorText = await response.text();
