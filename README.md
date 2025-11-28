@@ -12,6 +12,14 @@ Copy `.env.example` to `.env.local` and fill:
 ```
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
+OWNER_CHAT_ID=
+BOT_INBOX_EMAIL=
+TRUSTED_SENDER_EMAIL=
+GMAIL_CLIENT_ID=
+GMAIL_CLIENT_SECRET=
+GMAIL_REFRESH_TOKEN=
+PROCESSED_LABEL_NAME=ProcessedByKindleBot
+OBSIDIAN_INBOX_EMAIL=
 KINDLE_EMAIL=
 FROM_EMAIL=
 SMTP_HOST=
@@ -46,6 +54,13 @@ curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
   -d "url=https://<your-vercel-domain>/api/telegram" \
   -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
 ```
+
+## Gmail check (Vercel Cron)
+- Add a Vercel Cron job hitting `https://<your-vercel-domain>/api/check-mail`.
+- Gmail OAuth credentials: use a refresh token that can read the inbox configured in `BOT_INBOX_EMAIL`.
+- Only emails from `TRUSTED_SENDER_EMAIL` with `.html` attachments are processed. Others are logged and left untouched.
+- Matching emails are parsed to Markdown via `parseKindleHtml` + `kindleNotebookToMarkdown`, sent to Telegram (`OWNER_CHAT_ID`), and optionally emailed to `OBSIDIAN_INBOX_EMAIL`.
+- Processed messages are labeled with `PROCESSED_LABEL_NAME` (default `ProcessedByKindleBot`) and marked read.
 
 ## Usage
 - `/start` — shows help.
