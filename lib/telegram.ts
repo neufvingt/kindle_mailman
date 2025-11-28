@@ -61,10 +61,11 @@ export async function sendDocument(chatId: number | string, document: DocumentPa
     form.append('caption', document.caption);
   }
 
-  const content =
+  const buffer =
     typeof document.content === 'string' ? Buffer.from(document.content, 'utf8') : document.content;
+  const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 
-  const file = new File([content], document.filename, {
+  const file = new File([arrayBuffer], document.filename, {
     type: document.contentType ?? 'application/octet-stream',
   });
 
