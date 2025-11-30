@@ -1,4 +1,4 @@
-import { fetch } from 'undici';
+import { fetch, FormData, Blob } from 'undici';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const API_BASE = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null;
@@ -63,23 +63,19 @@ export async function sendDocument(chatId: number | string, document: DocumentPa
 
   const buffer =
     typeof document.content === 'string' ? Buffer.from(document.content, 'utf8') : document.content;
-  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
-  new Uint8Array(arrayBuffer).set(buffer);
 
-  const file = new File([arrayBuffer], document.filename, {
+  const blob = new Blob([buffer], {
     type: document.contentType ?? 'application/octet-stream',
   });
 
-  form.append('document', file);
+  // filename is required by Telegram to treat it as a document
+  form.append('document', blob, document.filename);
 
-  const response = await fetch(
-    `${API_BASE}/sendDocument`,
-    {
-      method: 'POST',
-      // @ts-expect-error — use undici FormData/Blob/File at runtime; TS does not narrow BodyInit union cleanly
-      body: form,
-    },
-  );
+  const response = await fetch(`${API_BASE}/sendDocument`, {
+    method: 'POST',
+    // undici FormData is required here; TS may not narrow BodyInit correctly
+    body: form as unknown as import('undici').BodyInit,
+  });
 
   if (!response.ok) {
     const errorText = await response.text();
