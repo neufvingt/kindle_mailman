@@ -5,6 +5,21 @@ import { sendToKindle } from '@/lib/email';
 
 export const runtime = 'nodejs';
 
+// In-memory settings storage (resets on server restart, default: enabled)
+const chatSettings = new Map<string, { cleanFilename: boolean }>();
+
+function getChatSettings(chatId: number | string) {
+  const key = String(chatId);
+  if (!chatSettings.has(key)) {
+    chatSettings.set(key, { cleanFilename: true });
+  }
+  return chatSettings.get(key)!;
+}
+
+function setChatSettings(chatId: number | string, settings: { cleanFilename: boolean }) {
+  chatSettings.set(String(chatId), settings);
+}
+
 type TelegramUser = {
   id: number;
   username?: string;
@@ -53,6 +68,35 @@ function verifyWebhookSecret(request: Request) {
   return received === expected;
 }
 
+function cleanFilename(filename: string): string {
+  // Get the extension
+  const lastDot = filename.lastIndexOf('.');
+  const hasExtension = lastDot > 0;
+  const name = hasExtension ? filename.slice(0, lastDot) : filename;
+  const ext = hasExtension ? filename.slice(lastDot) : '';
+
+  // Remove all forms of brackets and their contents
+  // Supports: () [] {} （）【】〔〕〈〉《》「」『』
+  const cleaned = name
+    .replace(/\([^)]*\)/g, '')      // ()
+    .replace(/\[[^\]]*\]/g, '')     // []
+    .replace(/\{[^}]*\}/g, '')      // {}
+    .replace(/（[^）]*）/g, '')     // （）
+    .replace(/【[^】]*】/g, '')     // 【】
+    .replace(/〔[^〕]*〕/g, '')     // 〔〕
+    .replace(/〈[^〉]*〉/g, '')     // 〈〉
+    .replace(/《[^》]*》/g, '')     // 《》
+    .replace(/「[^」]*」/g, '')     // 「」
+    .replace(/『[^』]*』/g, '')     // 『』
+    .replace(/\s+/g, ' ')           // Collapse multiple spaces
+    .trim();
+
+  // If the cleaned name is empty, use a default name
+  const finalName = cleaned || 'document';
+
+  return finalName + ext;
+}
+
 function buildSubject(message: TelegramMessage) {
   const user = message.from;
   const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim();
@@ -60,27 +104,32 @@ function buildSubject(message: TelegramMessage) {
   return `Telegram → Kindle | ${name || username || `chat ${message.chat.id}`}`;
 }
 
-function helpMessage() {
+function helpMessage(cleanEnabled: boolean) {
   return [
     'Send to Kindle via /send:',
     '/send <text to forward>',
     'You can also send a file (PDF/DOCX/EPUB/TXT/JPG/PNG) directly.',
+    '',
+    '/clean - Toggle filename cleaning (remove brackets)',
+    '/clean on|off - Enable or disable filename cleaning',
+    `Current status: ${cleanEnabled ? 'ON' : 'OFF'}`,
     '',
     'Example:',
     '/send This is my note for Kindle.',
   ].join('\n');
 }
 
-async function buildDocumentAttachment(document: NonNullable<TelegramMessage['document']>) {
+async function buildDocumentAttachment(document: NonNullable<TelegramMessage['document']>, shouldClean: boolean) {
   const file = await getFile(document.file_id);
   if (!file.file_path) {
     throw new Error('Telegram did not return file_path for document');
   }
 
   const content = await downloadFile(file.file_path);
+  const rawFilename = document.file_name ?? `document-${document.file_id}`;
 
   return {
-    filename: document.file_name ?? `document-${document.file_id}`,
+    filename: shouldClean ? cleanFilename(rawFilename) : rawFilename,
     content,
     contentType: document.mime_type,
   };
@@ -123,11 +172,13 @@ export async function POST(request: Request) {
   }
 
   try {
+    const settings = getChatSettings(message.chat.id);
+
     if (message?.document || (message?.photo && message.photo.length > 0)) {
       const attachments = [];
 
       if (message.document) {
-        attachments.push(await buildDocumentAttachment(message.document));
+        attachments.push(await buildDocumentAttachment(message.document, settings.cleanFilename));
       } else if (message.photo) {
         attachments.push(await buildPhotoAttachment(message.photo));
       }
@@ -149,7 +200,17 @@ export async function POST(request: Request) {
     const command = parseCommand(message.text);
 
     if (command.type === 'start') {
-      await sendMessage(message.chat.id, helpMessage());
+      await sendMessage(message.chat.id, helpMessage(settings.cleanFilename));
+      return NextResponse.json({ ok: true });
+    }
+
+    if (command.type === 'clean') {
+      const newValue = command.enabled ?? !settings.cleanFilename;
+      setChatSettings(message.chat.id, { cleanFilename: newValue });
+      await sendMessage(
+        message.chat.id,
+        `Filename cleaning is now ${newValue ? 'ON' : 'OFF'}.\n${newValue ? 'Brackets and their contents will be removed from filenames.' : 'Filenames will be kept as-is.'}`
+      );
       return NextResponse.json({ ok: true });
     }
 
