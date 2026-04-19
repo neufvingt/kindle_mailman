@@ -35,6 +35,15 @@ If you set `SILICONFLOW_API_KEY`, the bot will automatically extract book title 
 
 Get your API key from [SiliconFlow](https://siliconflow.cn/).
 
+**Available environment variables:**
+- `SILICONFLOW_API_KEY` - Your SiliconFlow API key (required)
+- `SILICONFLOW_MODEL` - Model to use (optional, default: `deepseek-ai/DeepSeek-V3`)
+
+**Supported models:**
+- `deepseek-ai/DeepSeek-V3` (default, recommended)
+- `deepseek-ai/DeepSeek-V2.5`
+- Other models available on SiliconFlow platform
+
 ## Local development
 ```bash
 npm install

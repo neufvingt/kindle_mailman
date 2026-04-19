@@ -30,6 +30,9 @@ export async function extractBookMetadata(
       return null;
     }
 
+    // Get model from env or use default
+    const model = process.env.SILICONFLOW_MODEL || 'deepseek-ai/DeepSeek-V3';
+
     // Call SiliconFlow DeepSeek API
     const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
       method: 'POST',
@@ -38,7 +41,7 @@ export async function extractBookMetadata(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'deepseek-ai/DeepSeek-V3',
+        model,
         messages: [
           {
             role: 'system',
