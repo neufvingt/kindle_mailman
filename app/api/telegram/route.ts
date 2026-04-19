@@ -199,6 +199,15 @@ export async function POST(request: Request) {
         );
         if (metadata) {
           console.log(`[Telegram] Metadata extracted: ${metadata.title} by ${metadata.author}`);
+
+          // Rename the attachment file using extracted metadata
+          const ext = attachment.filename.split('.').pop();
+          const newFilename = metadata.author
+            ? `${metadata.title} - ${metadata.author}.${ext}`
+            : `${metadata.title}.${ext}`;
+
+          console.log(`[Telegram] Renaming file from "${attachment.filename}" to "${newFilename}"`);
+          attachment.filename = newFilename;
         } else {
           console.log('[Telegram] No metadata extracted, using default subject');
         }
