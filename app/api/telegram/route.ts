@@ -69,14 +69,13 @@ function verifyWebhookSecret(request: Request) {
 }
 
 function cleanFilename(filename: string): string {
-  // Get the extension
   const lastDot = filename.lastIndexOf('.');
   const hasExtension = lastDot > 0;
   const name = hasExtension ? filename.slice(0, lastDot) : filename;
   const ext = hasExtension ? filename.slice(lastDot) : '';
 
-  // Remove all forms of brackets and their contents
-  // Supports: () [] {} （）【】〔〕〈〉《》「」『』
+  const sourceTagPattern = /[\s,，._-]*(?:z[\s._-]*library|z[\s._-]*lib|zlib|1lib)(?:[\s._-]*[a-z0-9]{1,8})*[\s,，._-]*/gi;
+
   const cleaned = name
     .replace(/\([^)]*\)/g, '')      // ()
     .replace(/\[[^\]]*\]/g, '')     // []
@@ -88,10 +87,12 @@ function cleanFilename(filename: string): string {
     .replace(/《[^》]*》/g, '')     // 《》
     .replace(/「[^」]*」/g, '')     // 「」
     .replace(/『[^』]*』/g, '')     // 『』
+    .replace(sourceTagPattern, '')
+    .replace(/[，,]+/g, ' ')
     .replace(/\s+/g, ' ')           // Collapse multiple spaces
+    .replace(/^[.\-_ ]+|[.\-_ ]+$/g, '')
     .trim();
 
-  // If the cleaned name is empty, use a default name
   const finalName = cleaned || 'document';
 
   return finalName + ext;
@@ -110,7 +111,7 @@ function helpMessage(cleanEnabled: boolean) {
     '/send <text to forward>',
     'You can also send a file (PDF/DOCX/EPUB/TXT/JPG/PNG) directly.',
     '',
-    '/clean - Toggle filename cleaning (remove brackets)',
+    '/clean - Toggle filename cleaning (remove brackets/source tags)',
     '/clean on|off - Enable or disable filename cleaning',
     `Current status: ${cleanEnabled ? 'ON' : 'OFF'}`,
     '',
@@ -209,7 +210,7 @@ export async function POST(request: Request) {
       setChatSettings(message.chat.id, { cleanFilename: newValue });
       await sendMessage(
         message.chat.id,
-        `Filename cleaning is now ${newValue ? 'ON' : 'OFF'}.\n${newValue ? 'Brackets and their contents will be removed from filenames.' : 'Filenames will be kept as-is.'}`
+        `Filename cleaning is now ${newValue ? 'ON' : 'OFF'}.\n${newValue ? 'Brackets and source tags like z-library/1lib will be removed from filenames.' : 'Filenames will be kept as-is.'}`
       );
       return NextResponse.json({ ok: true });
     }
