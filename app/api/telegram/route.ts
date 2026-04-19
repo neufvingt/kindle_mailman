@@ -191,11 +191,17 @@ export async function POST(request: Request) {
       // Try to extract book metadata using DeepSeek
       let subject = buildSubject(message);
       if (attachment && message.document) {
+        console.log('[Telegram] Attempting to extract book metadata...');
         const metadata = await extractBookMetadata(
           attachment.content,
           attachment.filename,
           attachment.contentType
         );
+        if (metadata) {
+          console.log(`[Telegram] Metadata extracted: ${metadata.title} by ${metadata.author}`);
+        } else {
+          console.log('[Telegram] No metadata extracted, using default subject');
+        }
         subject = formatBookSubject(metadata, subject);
       }
 
