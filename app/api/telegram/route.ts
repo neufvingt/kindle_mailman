@@ -200,18 +200,19 @@ export async function POST(request: Request) {
         if (metadata) {
           console.log(`[Telegram] Metadata extracted: ${metadata.title} by ${metadata.author}`);
 
-          // Rename the attachment file using extracted metadata
+          // Rename the attachment file using only the extracted title
+          // Kindle will read author from EPUB internal metadata
           const ext = attachment.filename.split('.').pop();
-          const newFilename = metadata.author
-            ? `${metadata.title} - ${metadata.author}.${ext}`
-            : `${metadata.title}.${ext}`;
+          const newFilename = `${metadata.title}.${ext}`;
 
           console.log(`[Telegram] Renaming file from "${attachment.filename}" to "${newFilename}"`);
           attachment.filename = newFilename;
+
+          // Update email subject to include both title and author
+          subject = formatBookSubject(metadata, subject);
         } else {
           console.log('[Telegram] No metadata extracted, using default subject');
         }
-        subject = formatBookSubject(metadata, subject);
       }
 
       await sendToKindle({
