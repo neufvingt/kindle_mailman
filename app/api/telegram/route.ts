@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { downloadFile, getFile, sendMessage } from '@/lib/telegram';
 import { parseCommand } from '@/lib/commands';
 import { sendToKindle } from '@/lib/email';
+import { extractBookMetadata, formatBookSubject } from '@/lib/siliconflow';
 
 export const runtime = 'nodejs';
 
@@ -177,15 +178,29 @@ export async function POST(request: Request) {
 
     if (message?.document || (message?.photo && message.photo.length > 0)) {
       const attachments = [];
+      let attachment;
 
       if (message.document) {
-        attachments.push(await buildDocumentAttachment(message.document, settings.cleanFilename));
+        attachment = await buildDocumentAttachment(message.document, settings.cleanFilename);
+        attachments.push(attachment);
       } else if (message.photo) {
-        attachments.push(await buildPhotoAttachment(message.photo));
+        attachment = await buildPhotoAttachment(message.photo);
+        attachments.push(attachment);
+      }
+
+      // Try to extract book metadata using DeepSeek
+      let subject = buildSubject(message);
+      if (attachment && message.document) {
+        const metadata = await extractBookMetadata(
+          attachment.content,
+          attachment.filename,
+          attachment.contentType
+        );
+        subject = formatBookSubject(metadata, subject);
       }
 
       await sendToKindle({
-        subject: buildSubject(message),
+        subject,
         text: message.caption || 'Forwarded from Telegram',
         attachments,
       });

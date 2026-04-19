@@ -27,7 +27,13 @@ SMTP_PORT=465
 SMTP_USER=
 SMTP_PASS=
 SMTP_SECURE=true
+SILICONFLOW_API_KEY=  # Optional: for AI book metadata extraction
 ```
+
+### AI Book Metadata Extraction (Optional)
+If you set `SILICONFLOW_API_KEY`, the bot will automatically extract book title and author from uploaded documents using DeepSeek AI. The extracted metadata will be used as the email subject when sending to Kindle.
+
+Get your API key from [SiliconFlow](https://siliconflow.cn/).
 
 ## Local development
 ```bash
