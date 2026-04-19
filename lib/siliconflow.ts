@@ -45,7 +45,14 @@ export async function extractBookMetadata(
       messages: [
         {
           role: 'system',
-          content: 'You are a book metadata extraction assistant. Extract the book title and author from the provided text. Return ONLY a JSON object with "title" and "author" fields. If you cannot determine them with confidence, return {"title": "", "author": ""}.'
+          content: `You are a book metadata extraction assistant. Extract the book title and author from the provided text.
+
+Author name formatting rules:
+- For Chinese authors or web novels: Use only the author name (e.g., "刘慈欣", "唐家三少")
+- For foreign authors: Use format "[Country]FirstName·LastName" with · as separator (e.g., "[美]欧内斯特·海明威", "[日]东野圭吾", "[英]J·K·罗琳")
+- Use Chinese country names: 美国→美, 英国→英, 日本→日, 法国→法, 俄罗斯→俄, etc.
+
+Return ONLY a JSON object with "title" and "author" fields. If you cannot determine them with confidence, return {"title": "", "author": ""}.`
         },
         {
           role: 'user',
@@ -122,7 +129,14 @@ async function extractFromFilename(filename: string, apiKey: string): Promise<Bo
         messages: [
           {
             role: 'system',
-            content: 'Extract book title and author from filename. Return ONLY JSON: {"title": "...", "author": "..."}. If unclear, return empty strings.'
+            content: `Extract book title and author from filename.
+
+Author name formatting rules:
+- For Chinese authors or web novels: Use only the author name (e.g., "刘慈欣", "唐家三少")
+- For foreign authors: Use format "[Country]FirstName·LastName" with · as separator (e.g., "[美]欧内斯特·海明威", "[日]东野圭吾")
+- Use Chinese country names: 美国→美, 英国→英, 日本→日, 法国→法, 俄罗斯→俄, etc.
+
+Return ONLY JSON: {"title": "...", "author": "..."}. If unclear, return empty strings.`
           },
           {
             role: 'user',
