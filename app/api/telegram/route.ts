@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { downloadFile, getFile, sendMessage } from '@/lib/telegram';
 import { parseCommand } from '@/lib/commands';
 import { sendToKindle } from '@/lib/email';
-import { extractBookMetadata, formatBookSubject } from '@/lib/siliconflow';
+import { extractBookMetadata, formatBookSubject, updateEpubAuthor } from '@/lib/siliconflow';
 
 export const runtime = 'nodejs';
 
@@ -201,12 +201,20 @@ export async function POST(request: Request) {
           console.log(`[Telegram] Metadata extracted: ${metadata.title} by ${metadata.author}`);
 
           // Rename the attachment file using only the extracted title
-          // Kindle will read author from EPUB internal metadata
           const ext = attachment.filename.split('.').pop();
           const newFilename = `${metadata.title}.${ext}`;
 
           console.log(`[Telegram] Renaming file from "${attachment.filename}" to "${newFilename}"`);
           attachment.filename = newFilename;
+
+          // For EPUB files, update internal dc:creator with the formatted author
+          if (ext === 'epub' && metadata.author && metadata.author !== 'Unknown') {
+            try {
+              attachment.content = await updateEpubAuthor(attachment.content, metadata.author);
+            } catch (err) {
+              console.error('[Telegram] Failed to update EPUB author metadata:', err);
+            }
+          }
 
           // Update email subject to include both title and author
           subject = formatBookSubject(metadata, subject);

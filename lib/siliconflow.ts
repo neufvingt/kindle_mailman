@@ -3,6 +3,8 @@
  * Extract book title and author from document content
  */
 
+import JSZip from 'jszip';
+
 interface BookMetadata {
   title: string;
   author: string;
@@ -25,7 +27,7 @@ export async function extractBookMetadata(
     console.log(`[SiliconFlow] Starting metadata extraction for: ${filename}, mime: ${mimeType}`);
 
     // Extract text preview from buffer
-    const textPreview = extractTextPreview(content, mimeType, filename);
+    const textPreview = await extractTextPreview(content, mimeType, filename);
 
     if (!textPreview || textPreview.length < 20) {
       console.log('[SiliconFlow] Could not extract sufficient text, trying filename-based extraction');
@@ -176,7 +178,7 @@ Return ONLY JSON: {"title": "...", "author": "..."}. If unclear, return empty st
   }
 }
 
-function extractTextPreview(content: Buffer, mimeType?: string, filename?: string): string | null {
+async function extractTextPreview(content: Buffer, mimeType?: string, filename?: string): Promise<string | null> {
   try {
     console.log(`[SiliconFlow] Extracting text from mime type: ${mimeType || 'unknown'}, size: ${content.length} bytes`);
 
@@ -193,21 +195,8 @@ function extractTextPreview(content: Buffer, mimeType?: string, filename?: strin
 
     // For EPUB (it's a ZIP file with XML inside)
     if (ext === 'epub' || mimeType?.includes('epub')) {
-      console.log('[SiliconFlow] Detected EPUB format');
-      const text = content.toString('utf-8', 0, Math.min(content.length, 20000));
-
-      // Try to extract metadata from EPUB structure
-      const titleMatch = text.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/i);
-      const authorMatch = text.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/i);
-
-      if (titleMatch || authorMatch) {
-        const extracted = [
-          titleMatch ? `Title: ${titleMatch[1]}` : '',
-          authorMatch ? `Author: ${authorMatch[1]}` : ''
-        ].filter(Boolean).join('\n');
-        console.log(`[SiliconFlow] Found EPUB metadata: ${extracted}`);
-        return extracted;
-      }
+      console.log('[SiliconFlow] Detected EPUB format, parsing as ZIP');
+      return await extractEpubTextPreview(content);
     }
 
     // For MOBI/AZW
@@ -245,6 +234,49 @@ function extractTextPreview(content: Buffer, mimeType?: string, filename?: strin
   }
 }
 
+/**
+ * Properly parse EPUB as ZIP to extract metadata and text preview from OPF.
+ */
+async function extractEpubTextPreview(content: Buffer): Promise<string | null> {
+  try {
+    const zip = await JSZip.loadAsync(content);
+
+    // Find the OPF file
+    let opfPath: string | null = null;
+    zip.forEach((relativePath, file) => {
+      if (!file.dir && relativePath.endsWith('.opf')) {
+        opfPath = relativePath;
+      }
+    });
+
+    if (!opfPath) {
+      console.warn('[SiliconFlow] No .opf found in EPUB ZIP');
+      return null;
+    }
+
+    const opfContent = await zip.file(opfPath)!.async('string');
+
+    const titleMatch = opfContent.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/i);
+    const authorMatch = opfContent.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/i);
+
+    if (titleMatch || authorMatch) {
+      const extracted = [
+        titleMatch ? `Title: ${titleMatch[1]}` : '',
+        authorMatch ? `Author: ${authorMatch[1]}` : ''
+      ].filter(Boolean).join('\n');
+      console.log(`[SiliconFlow] Found EPUB metadata via ZIP: ${extracted}`);
+      return extracted;
+    }
+
+    // Fallback: extract first few hundred chars of OPF for the AI to work with
+    console.log('[SiliconFlow] No dc:title/dc:creator in OPF, sending OPF preview');
+    return opfContent.slice(0, 3000);
+  } catch (error) {
+    console.error('[SiliconFlow] Error parsing EPUB as ZIP:', error);
+    return null;
+  }
+}
+
 function parseMetadataResponse(text: string): { title: string; author: string } | null {
   try {
     // Try to extract JSON from response
@@ -261,6 +293,47 @@ function parseMetadataResponse(text: string): { title: string; author: string } 
     console.error('[SiliconFlow] Error parsing metadata response:', error);
     return null;
   }
+}
+
+/**
+ * Update the dc:creator in an EPUB's OPF file with the formatted author name.
+ * EPUB is a ZIP; we find the .opf file inside, replace <dc:creator>, and re-zip.
+ */
+export async function updateEpubAuthor(epubBuffer: Buffer, author: string): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(epubBuffer);
+
+  // Find the OPF file (usually at OEBPS/content.opf or similar)
+  let opfPath: string | null = null;
+  zip.forEach((relativePath, file) => {
+    if (!file.dir && relativePath.endsWith('.opf')) {
+      opfPath = relativePath;
+    }
+  });
+
+  if (!opfPath) {
+    console.warn('[EPUB] No .opf file found inside EPUB, skipping author update');
+    return epubBuffer;
+  }
+
+  console.log(`[EPUB] Found OPF at: ${opfPath}`);
+  const opfContent = await zip.file(opfPath)!.async('string');
+
+  // Replace dc:creator content with the formatted author
+  const updatedOpf = opfContent.replace(
+    /<dc:creator[^>]*>([^<]*)<\/dc:creator>/i,
+    `<dc:creator>${author}</dc:creator>`
+  );
+
+  if (updatedOpf === opfContent) {
+    console.warn('[EPUB] No <dc:creator> found in OPF, skipping author update');
+    return epubBuffer;
+  }
+
+  zip.file(opfPath, updatedOpf);
+
+  const newBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  console.log(`[EPUB] Author metadata updated to: "${author}"`);
+  return newBuffer;
 }
 
 export function formatBookSubject(metadata: BookMetadata | null, fallback: string): string {
