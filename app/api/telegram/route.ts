@@ -110,7 +110,7 @@ function helpMessage(cleanEnabled: boolean) {
   return [
     'Send to Kindle via /send:',
     '/send <text to forward>',
-    'You can also send a file (PDF/DOCX/EPUB/TXT/JPG/PNG) directly.',
+    'You can also send a file (DOCX/EPUB/MOBI/TXT/JPG/PNG) directly.',
     '',
     '/clean - Toggle filename cleaning (remove brackets/source tags)',
     '/clean on|off - Enable or disable filename cleaning',

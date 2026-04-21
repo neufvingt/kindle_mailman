@@ -5,7 +5,6 @@
 
 import JSZip from 'jszip';
 import { createHash } from 'node:crypto';
-import { PDFParse } from 'pdf-parse';
 
 interface BookMetadata {
   title: string;
@@ -338,10 +337,6 @@ async function extractTextPreview(content: Buffer, mimeType?: string, filename?:
       return await extractEpubTextPreview(content);
     }
 
-    if (ext === 'pdf' || mimeType?.includes('pdf')) {
-      return await extractPdfTextPreview(content);
-    }
-
     if (ext === 'mobi' || ext === 'azw' || ext === 'azw3') {
       const meta = extractMobiMetadataDirect(content);
       if (meta && (meta.title || meta.author)) {
@@ -368,33 +363,6 @@ async function extractTextPreview(content: Buffer, mimeType?: string, filename?:
   } catch (error) {
     console.error('[SiliconFlow] Error extracting text preview:', error);
     return null;
-  }
-}
-
-async function extractPdfTextPreview(content: Buffer): Promise<string | null> {
-  let parser: PDFParse | null = null;
-  try {
-    parser = new PDFParse({ data: new Uint8Array(content) });
-
-    const info = await parser.getInfo();
-    const prefix: string[] = [];
-    const pdfTitle = typeof info.info?.Title === 'string' ? info.info.Title.trim() : '';
-    const pdfAuthor = typeof info.info?.Author === 'string' ? info.info.Author.trim() : '';
-    if (pdfTitle) prefix.push(`Title: ${pdfTitle}`);
-    if (pdfAuthor) prefix.push(`Author: ${pdfAuthor}`);
-
-    const textResult = await parser.getText({ first: 3 });
-    const text = (textResult.text || '').replace(/\s+/g, ' ').trim();
-
-    console.log(`[SiliconFlow] PDF parsed: ${info.total} pages, ${text.length} text chars, PDF Title="${pdfTitle}", Author="${pdfAuthor}"`);
-
-    const combined = [...prefix, text].filter(Boolean).join('\n').slice(0, 3000);
-    return combined.length >= 20 ? combined : null;
-  } catch (error) {
-    console.error('[SiliconFlow] PDF parse failed:', error);
-    return null;
-  } finally {
-    try { await parser?.destroy(); } catch { /* noop */ }
   }
 }
 
