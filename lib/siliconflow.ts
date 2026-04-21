@@ -42,7 +42,6 @@ function cacheSet(hash: string, metadata: BookMetadata): void {
 // ---------- API call helpers: timeout + retry ----------
 
 const API_TIMEOUT_MS = 15000;
-const AUTHOR_FORMAT_TIMEOUT_MS = 10000;
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
 
@@ -112,55 +111,6 @@ async function callAndParseJSON(
   return null;
 }
 
-// ---------- Author name formatting (short AI call for short-circuit path) ----------
-
-async function formatAuthorName(rawAuthor: string, titleHint: string, apiKey: string): Promise<string> {
-  // Already formatted with country prefix like "[美]..." — trust it.
-  if (/^\[[^\]]+\]/.test(rawAuthor)) {
-    console.log(`[SiliconFlow] Author already formatted, skipping AI: "${rawAuthor}"`);
-    return rawAuthor;
-  }
-
-  const text = await callSiliconFlowAPI(
-    apiKey,
-    [
-      {
-        role: 'system',
-        content: `You are a book author name formatter.
-
-Rules:
-- Chinese authors or web novels: Use only the name (e.g., "刘慈欣", "唐家三少")
-- Korean authors: Use "[韩]姓名" (e.g., "[韩]金爱烂", "[韩]韩江"). Common Korean surnames (金, 李, 朴, 崔, 郑, 姜, 尹, 林, 韩, 吴, 张 etc.) can also be Chinese — use the title context to distinguish.
-- Other foreign authors: "[国]FirstName·LastName" with · as separator (e.g., "[美]欧内斯特·海明威", "[日]东野圭吾", "[英]J·K·罗琳")
-- Country codes in Chinese: 美国→美, 英国→英, 日本→日, 法国→法, 俄罗斯→俄, 韩国→韩, 德国→德
-
-Return ONLY the formatted author name. No JSON, no quotes, no explanation, no prefix.`,
-      },
-      {
-        role: 'user',
-        content: `Title: ${titleHint}\nAuthor: ${rawAuthor}\n\nFormatted:`,
-      },
-    ],
-    60,
-    AUTHOR_FORMAT_TIMEOUT_MS,
-  );
-
-  if (!text) {
-    console.log(`[SiliconFlow] Author format failed, using raw: "${rawAuthor}"`);
-    return rawAuthor;
-  }
-
-  const cleaned = text
-    .replace(/^["'`]|["'`]$/g, '')
-    .replace(/^(?:Formatted|Author)[:：]\s*/i, '')
-    .split('\n')[0]
-    .trim();
-
-  if (!cleaned) return rawAuthor;
-  console.log(`[SiliconFlow] Author formatted: "${rawAuthor}" → "${cleaned}"`);
-  return cleaned;
-}
-
 // ---------- Main entry point ----------
 
 export async function extractBookMetadata(
@@ -184,40 +134,6 @@ export async function extractBookMetadata(
 
   try {
     console.log(`[SiliconFlow] Starting metadata extraction for: ${filename}, mime: ${mimeType}, hash: ${hash}`);
-
-    const ext = filename.toLowerCase().split('.').pop();
-
-    // EPUB short-circuit: parse OPF directly, only call AI to format author
-    if (ext === 'epub' || mimeType?.includes('epub')) {
-      const fromOpf = await extractEpubMetadataDirect(content);
-      if (fromOpf?.title && fromOpf.author) {
-        console.log(`[SiliconFlow] ✓ EPUB OPF short-circuit: "${fromOpf.title}" / "${fromOpf.author}"`);
-        const formattedAuthor = await formatAuthorName(fromOpf.author, fromOpf.title, apiKey);
-        const result: BookMetadata = {
-          title: fromOpf.title,
-          author: formattedAuthor,
-          confidence: 'high',
-        };
-        cacheSet(hash, result);
-        return result;
-      }
-    }
-
-    // MOBI short-circuit: parse EXTH header directly
-    if (ext === 'mobi' || ext === 'azw' || ext === 'azw3') {
-      const fromMobi = extractMobiMetadataDirect(content);
-      if (fromMobi?.title && fromMobi.author) {
-        console.log(`[SiliconFlow] ✓ MOBI EXTH short-circuit: "${fromMobi.title}" / "${fromMobi.author}"`);
-        const formattedAuthor = await formatAuthorName(fromMobi.author, fromMobi.title, apiKey);
-        const result: BookMetadata = {
-          title: fromMobi.title,
-          author: formattedAuthor,
-          confidence: 'high',
-        };
-        cacheSet(hash, result);
-        return result;
-      }
-    }
 
     const textPreview = await extractTextPreview(content, mimeType, filename);
 
@@ -428,11 +344,14 @@ function extractMobiMetadataDirect(content: Buffer): { title: string; author: st
 // ---------- EPUB helpers ----------
 
 /**
- * Parse EPUB OPF and return raw dc:title / dc:creator directly.
+ * Rich EPUB preview: OPF metadata (title, author, publisher, language,
+ * description) + body text from first non-trivial spine items, so the AI
+ * has enough context to infer author nationality.
  */
-async function extractEpubMetadataDirect(content: Buffer): Promise<{ title: string; author: string } | null> {
+async function extractEpubTextPreview(content: Buffer): Promise<string | null> {
   try {
     const zip = await JSZip.loadAsync(content);
+
     let opfPath: string | null = null;
     zip.forEach((relativePath, file) => {
       if (!file.dir && relativePath.endsWith('.opf')) opfPath = relativePath;
@@ -440,45 +359,98 @@ async function extractEpubMetadataDirect(content: Buffer): Promise<{ title: stri
     if (!opfPath) return null;
 
     const opf = await zip.file(opfPath)!.async('string');
-    const titleMatch = opf.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/i);
-    const authorMatch = opf.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/i);
 
-    const title = decodeXmlEntities(titleMatch?.[1]?.trim() || '');
-    const author = decodeXmlEntities(authorMatch?.[1]?.trim() || '');
+    const metaLines: string[] = [];
+    const pick = (tag: string, flags = 'i') =>
+      decodeXmlEntities(
+        opf.match(new RegExp(`<dc:${tag}[^>]*>([\\s\\S]+?)<\\/dc:${tag}>`, flags))?.[1]?.trim() || '',
+      );
+    const title = pick('title');
+    const author = pick('creator');
+    const publisher = pick('publisher');
+    const language = pick('language');
+    const description = pick('description').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-    if (!title && !author) return null;
-    return { title, author };
+    if (title) metaLines.push(`Title: ${title}`);
+    if (author) metaLines.push(`Author (raw): ${author}`);
+    if (publisher) metaLines.push(`Publisher: ${publisher}`);
+    if (language) metaLines.push(`Language: ${language}`);
+    if (description) metaLines.push(`Description: ${description.slice(0, 500)}`);
+
+    const bodyText = await extractEpubSpineText(zip, opfPath, opf);
+
+    const parts: string[] = [];
+    if (metaLines.length > 0) parts.push(metaLines.join('\n'));
+    if (bodyText) parts.push(`--- Body text ---\n${bodyText}`);
+
+    if (parts.length === 0) return opf.slice(0, 3000);
+    return parts.join('\n\n').slice(0, 4000);
   } catch (error) {
-    console.error('[SiliconFlow] Error parsing EPUB OPF:', error);
+    console.error('[SiliconFlow] EPUB preview failed:', error);
     return null;
   }
 }
 
-async function extractEpubTextPreview(content: Buffer): Promise<string | null> {
-  const direct = await extractEpubMetadataDirect(content);
-  if (direct && (direct.title || direct.author)) {
-    return [
-      direct.title ? `Title: ${direct.title}` : '',
-      direct.author ? `Author: ${direct.author}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-
-  // Fallback: raw OPF preview for the AI to parse
+async function extractEpubSpineText(zip: JSZip, opfPath: string, opfContent: string): Promise<string | null> {
   try {
-    const zip = await JSZip.loadAsync(content);
-    let opfPath: string | null = null;
-    zip.forEach((relativePath, file) => {
-      if (!file.dir && relativePath.endsWith('.opf')) opfPath = relativePath;
-    });
-    if (!opfPath) return null;
-    const opf = await zip.file(opfPath)!.async('string');
-    return opf.slice(0, 3000);
+    const manifest: Record<string, string> = {};
+    const itemMatches = opfContent.match(/<item\b[^>]*\/?>/gi) || [];
+    for (const item of itemMatches) {
+      const id = item.match(/\bid\s*=\s*["']([^"']+)["']/i)?.[1];
+      const href = item.match(/\bhref\s*=\s*["']([^"']+)["']/i)?.[1];
+      if (id && href) manifest[id] = href;
+    }
+
+    const spineBlock = opfContent.match(/<spine[^>]*>([\s\S]*?)<\/spine>/i)?.[1] ?? '';
+    const spineItems: string[] = [];
+    const itemrefRegex = /<itemref\b[^>]*\bidref\s*=\s*["']([^"']+)["']/gi;
+    let m: RegExpExecArray | null;
+    while ((m = itemrefRegex.exec(spineBlock)) !== null) {
+      spineItems.push(m[1]);
+    }
+
+    const opfDir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+    const collected: string[] = [];
+    let totalLen = 0;
+    const TARGET = 2500;
+
+    for (const idref of spineItems.slice(0, 8)) {
+      if (totalLen >= TARGET) break;
+      const href = manifest[idref];
+      if (!href) continue;
+
+      const cleanHref = decodeURIComponent(href.split('#')[0]);
+      const fullPath = opfDir + cleanHref;
+      const file = zip.file(fullPath) ?? zip.file(cleanHref);
+      if (!file) continue;
+
+      const html = await file.async('string');
+      const text = stripHtml(html);
+
+      // Skip very short chunks (cover/title/copyright pages usually < 200 chars).
+      if (text.length < 200) continue;
+
+      const take = text.slice(0, TARGET - totalLen);
+      collected.push(take);
+      totalLen += take.length;
+    }
+
+    if (collected.length === 0) return null;
+    return collected.join('\n\n');
   } catch (error) {
-    console.error('[SiliconFlow] EPUB preview fallback failed:', error);
+    console.error('[SiliconFlow] Spine text extraction failed:', error);
     return null;
   }
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style\b[\s\S]*?<\/style>/gi, '')
+    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function decodeXmlEntities(s: string): string {
