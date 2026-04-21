@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { downloadFile, getFile, sendMessage } from '@/lib/telegram';
+import { downloadFile, editMessageText, getFile, sendMessage } from '@/lib/telegram';
 import { parseCommand } from '@/lib/commands';
 import { sendToKindle } from '@/lib/email';
 import { extractBookMetadata, formatBookSubject, updateEpubAuthor } from '@/lib/siliconflow';
@@ -173,12 +173,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, ignored: true });
   }
 
+  let progressMsgId: number | null = null;
+  const setProgress = async (text: string) => {
+    if (progressMsgId !== null) {
+      try {
+        await editMessageText(message.chat.id, progressMsgId, text);
+        return;
+      } catch (err) {
+        console.error('[Telegram] editMessageText failed, sending new:', err);
+      }
+    }
+    const sent = await sendMessage(message.chat.id, text);
+    progressMsgId = sent.message_id;
+  };
+
   try {
     const settings = getChatSettings(message.chat.id);
 
     if (message?.document || (message?.photo && message.photo.length > 0)) {
-      // Notify: file received
-      await sendMessage(message.chat.id, '📥 已收到文件，处理中...');
+      await setProgress('📥 已收到文件，处理中...');
 
       const attachments = [];
       let attachment;
@@ -195,7 +208,7 @@ export async function POST(request: Request) {
       let subject = buildSubject(message);
       let bookInfo: { title: string; author: string } | null = null;
       if (attachment && message.document) {
-        await sendMessage(message.chat.id, '🔍 正在提取书籍信息...');
+        await setProgress('🔍 正在提取书籍信息...');
         console.log('[Telegram] Attempting to extract book metadata...');
         const metadata = await extractBookMetadata(
           attachment.content,
@@ -224,8 +237,10 @@ export async function POST(request: Request) {
 
           // Update email subject to include both title and author
           subject = formatBookSubject(metadata, subject);
+          await setProgress(`📨 正在发送到 Kindle...\n📖 ${bookInfo.title} — ${bookInfo.author}`);
         } else {
           console.log('[Telegram] No metadata extracted, using default subject');
+          await setProgress('📨 正在发送到 Kindle...');
         }
       }
 
@@ -235,11 +250,10 @@ export async function POST(request: Request) {
         attachments,
       });
 
-      // Notify: delivered with book info
       if (bookInfo) {
-        await sendMessage(message.chat.id, `📤 已发送到 Kindle ✅\n📖 ${bookInfo.title} — ${bookInfo.author}`);
+        await setProgress(`📤 已发送到 Kindle ✅\n📖 ${bookInfo.title} — ${bookInfo.author}`);
       } else {
-        await sendMessage(message.chat.id, '📤 已发送到 Kindle ✅');
+        await setProgress('📤 已发送到 Kindle ✅');
       }
       return NextResponse.json({ ok: true });
     }
@@ -280,7 +294,11 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('Telegram webhook error', error);
     try {
-      await sendMessage(message.chat.id, '❌ 发送失败，请重试');
+      if (progressMsgId !== null) {
+        await editMessageText(message.chat.id, progressMsgId, '❌ 发送失败，请重试');
+      } else {
+        await sendMessage(message.chat.id, '❌ 发送失败，请重试');
+      }
     } catch (notifyError) {
       console.error('Failed to notify user about the error', notifyError);
     }

@@ -33,9 +33,26 @@ async function telegramRequest<T>(method: string, body: unknown): Promise<T> {
   return data.result;
 }
 
-export async function sendMessage(chatId: number | string, text: string) {
-  return telegramRequest('sendMessage', {
+export type SentMessage = {
+  message_id: number;
+  chat: { id: number | string };
+};
+
+export async function sendMessage(chatId: number | string, text: string): Promise<SentMessage> {
+  return telegramRequest<SentMessage>('sendMessage', {
     chat_id: chatId,
+    text,
+  });
+}
+
+export async function editMessageText(
+  chatId: number | string,
+  messageId: number,
+  text: string,
+): Promise<void> {
+  await telegramRequest('editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
     text,
   });
 }
