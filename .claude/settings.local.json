@@ -17,7 +17,8 @@
       "mcp__context7__resolve-library-id",
       "Bash(npx eslint *)",
       "Bash(npm uninstall *)",
-      "Bash(npx next *)"
+      "Bash(npx next *)",
+      "Bash(git fetch *)"
     ]
   }
 }
