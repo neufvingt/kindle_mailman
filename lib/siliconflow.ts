@@ -464,6 +464,15 @@ function decodeXmlEntities(s: string): string {
     .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
 }
 
+function xmlEscape(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 function parseMetadataResponse(text: string): { title: string; author: string } | null {
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -499,9 +508,10 @@ export async function updateEpubAuthor(epubBuffer: Buffer, author: string): Prom
   console.log(`[EPUB] Found OPF at: ${opfPath}`);
   const opfContent = await zip.file(opfPath)!.async('string');
 
+  const safeAuthor = xmlEscape(author);
   const updatedOpf = opfContent.replace(
-    /<dc:creator[^>]*>([^<]*)<\/dc:creator>/i,
-    `<dc:creator>${author}</dc:creator>`,
+    /<dc:creator([^>]*)>[^<]*<\/dc:creator>/i,
+    (_match, attrs: string) => `<dc:creator${attrs}>${safeAuthor}</dc:creator>`,
   );
 
   if (updatedOpf === opfContent) {

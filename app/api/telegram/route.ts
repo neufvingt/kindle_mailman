@@ -1,10 +1,13 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { downloadFile, editMessageText, getFile, sendMessage } from '@/lib/telegram';
 import { parseCommand } from '@/lib/commands';
 import { sendToKindle } from '@/lib/email';
 import { extractBookMetadata, formatBookSubject, updateEpubAuthor } from '@/lib/siliconflow';
 
 export const runtime = 'nodejs';
+
+// Telegram bot API can download files up to 20MB via standard API.
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 // In-memory settings storage (resets on server restart, default: enabled)
 const chatSettings = new Map<string, { cleanFilename: boolean }>();
@@ -173,95 +176,63 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, ignored: true });
   }
 
-  let progressMsgId: number | null = null;
-  const setProgress = async (text: string) => {
-    if (progressMsgId !== null) {
+  // Owner gate: only process messages from the configured owner when set.
+  const ownerChatId = process.env.OWNER_CHAT_ID;
+  if (ownerChatId && String(message.chat.id) !== ownerChatId) {
+    console.warn('[Telegram] Ignoring chat', message.chat.id, '(not OWNER_CHAT_ID)');
+    return NextResponse.json({ ok: true, ignored: 'unauthorized chat' });
+  }
+
+  const settings = getChatSettings(message.chat.id);
+
+  // Attachment path: ACK fast, then process in the background via after().
+  if (message.document || (message.photo && message.photo.length > 0)) {
+    const fileSize = message.document?.file_size ?? 0;
+    if (fileSize > MAX_FILE_SIZE) {
+      const mb = (fileSize / 1024 / 1024).toFixed(1);
+      const limit = MAX_FILE_SIZE / 1024 / 1024;
       try {
-        await editMessageText(message.chat.id, progressMsgId, text);
-        return;
-      } catch (err) {
-        console.error('[Telegram] editMessageText failed, sending new:', err);
-      }
-    }
-    const sent = await sendMessage(message.chat.id, text);
-    progressMsgId = sent.message_id;
-  };
-
-  try {
-    const settings = getChatSettings(message.chat.id);
-
-    if (message?.document || (message?.photo && message.photo.length > 0)) {
-      await setProgress('📥 已收到文件，处理中...');
-
-      const attachments = [];
-      let attachment;
-
-      if (message.document) {
-        attachment = await buildDocumentAttachment(message.document, settings.cleanFilename);
-        attachments.push(attachment);
-      } else if (message.photo) {
-        attachment = await buildPhotoAttachment(message.photo);
-        attachments.push(attachment);
-      }
-
-      // Try to extract book metadata using DeepSeek
-      let subject = buildSubject(message);
-      let bookInfo: { title: string; author: string } | null = null;
-      if (attachment && message.document) {
-        await setProgress('🔍 正在提取书籍信息...');
-        console.log('[Telegram] Attempting to extract book metadata...');
-        const metadata = await extractBookMetadata(
-          attachment.content,
-          attachment.filename,
-          attachment.contentType
+        await sendMessage(
+          message.chat.id,
+          `❌ 文件 ${mb}MB 超过 Telegram bot ${limit}MB 下载上限，请压缩后再发`,
         );
-        if (metadata) {
-          console.log(`[Telegram] Metadata extracted: ${metadata.title} by ${metadata.author}`);
-          bookInfo = { title: metadata.title, author: metadata.author };
+      } catch (err) {
+        console.error('[Telegram] size-limit notify failed', err);
+      }
+      return NextResponse.json({ ok: true, ignored: 'too large' });
+    }
 
-          // Rename the attachment file using only the extracted title
-          const ext = attachment.filename.split('.').pop();
-          const newFilename = `${metadata.title}.${ext}`;
+    let progressMsgId: number;
+    try {
+      const sent = await sendMessage(message.chat.id, '📥 已收到文件，处理中...');
+      progressMsgId = sent.message_id;
+    } catch (err) {
+      console.error('[Telegram] initial ack failed, aborting', err);
+      return NextResponse.json({ ok: false, error: 'telegram send failed' }, { status: 500 });
+    }
 
-          console.log(`[Telegram] Renaming file from "${attachment.filename}" to "${newFilename}"`);
-          attachment.filename = newFilename;
-
-          // For EPUB files, update internal dc:creator with the formatted author
-          if (ext === 'epub' && metadata.author && metadata.author !== 'Unknown') {
-            try {
-              attachment.content = await updateEpubAuthor(attachment.content, metadata.author);
-            } catch (err) {
-              console.error('[Telegram] Failed to update EPUB author metadata:', err);
-            }
-          }
-
-          // Update email subject to include both title and author
-          subject = formatBookSubject(metadata, subject);
-          await setProgress(`📨 正在发送到 Kindle...\n📖 ${bookInfo.title} — ${bookInfo.author}`);
-        } else {
-          console.log('[Telegram] No metadata extracted, using default subject');
-          await setProgress('📨 正在发送到 Kindle...');
+    after(async () => {
+      try {
+        await processAttachment(message, progressMsgId, settings);
+      } catch (err) {
+        console.error('[Telegram] unhandled background error', err);
+        try {
+          await editMessageText(message.chat.id, progressMsgId, '❌ 处理失败，请重试');
+        } catch {
+          /* noop */
         }
       }
+    });
 
-      await sendToKindle({
-        subject,
-        text: message.caption || 'Forwarded from Telegram',
-        attachments,
-      });
+    return NextResponse.json({ ok: true });
+  }
 
-      if (bookInfo) {
-        await setProgress(`📤 已发送到 Kindle ✅\n📖 ${bookInfo.title} — ${bookInfo.author}`);
-      } else {
-        await setProgress('📤 已发送到 Kindle ✅');
-      }
-      return NextResponse.json({ ok: true });
-    }
+  // Text / command path: fast enough to handle in the foreground.
+  if (!message.text) {
+    return NextResponse.json({ ok: true, ignored: true });
+  }
 
-    if (!message?.text) {
-      return NextResponse.json({ ok: true, ignored: true });
-    }
-
+  try {
     const command = parseCommand(message.text);
 
     if (command.type === 'start') {
@@ -292,17 +263,105 @@ export async function POST(request: Request) {
     await sendMessage(message.chat.id, 'Unknown command. Use /send <text> to forward to Kindle.');
     return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error('Telegram webhook error', error);
+    console.error('Telegram webhook error (text path)', error);
     try {
-      if (progressMsgId !== null) {
-        await editMessageText(message.chat.id, progressMsgId, '❌ 发送失败，请重试');
-      } else {
-        await sendMessage(message.chat.id, '❌ 发送失败，请重试');
-      }
+      await sendMessage(message.chat.id, '❌ 处理失败，请重试');
     } catch (notifyError) {
       console.error('Failed to notify user about the error', notifyError);
     }
     return NextResponse.json({ ok: false, error: 'delivery failed' }, { status: 500 });
+  }
+}
+
+function isBenignEditError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes('too many requests') ||
+    msg.includes('retry after') ||
+    msg.includes('message is not modified')
+  );
+}
+
+async function processAttachment(
+  message: TelegramMessage,
+  progressMsgId: number,
+  settings: { cleanFilename: boolean },
+) {
+  const chatId = message.chat.id;
+  const setProgress = async (text: string) => {
+    try {
+      await editMessageText(chatId, progressMsgId, text);
+    } catch (err) {
+      if (isBenignEditError(err)) return;
+      console.error('[Telegram] editMessageText failed', err);
+    }
+  };
+
+  let attachment;
+  try {
+    if (message.document) {
+      attachment = await buildDocumentAttachment(message.document, settings.cleanFilename);
+    } else if (message.photo) {
+      attachment = await buildPhotoAttachment(message.photo);
+    }
+  } catch (err) {
+    console.error('[Telegram] attachment download failed', err);
+    await setProgress('❌ 下载文件失败，请稍后重试');
+    return;
+  }
+
+  if (!attachment) {
+    await setProgress('❌ 未能解析附件');
+    return;
+  }
+
+  let subject = buildSubject(message);
+  let bookInfo: { title: string; author: string } | null = null;
+
+  if (message.document) {
+    await setProgress('🔍 正在提取书籍信息...');
+    const metadata = await extractBookMetadata(
+      attachment.content,
+      attachment.filename,
+      attachment.contentType,
+    );
+    if (metadata) {
+      bookInfo = { title: metadata.title, author: metadata.author };
+      const ext = attachment.filename.split('.').pop();
+      attachment.filename = `${metadata.title}.${ext}`;
+
+      if (ext === 'epub' && metadata.author && metadata.author !== 'Unknown') {
+        try {
+          attachment.content = await updateEpubAuthor(attachment.content, metadata.author);
+        } catch (err) {
+          console.error('[Telegram] EPUB author update failed (continuing)', err);
+        }
+      }
+
+      subject = formatBookSubject(metadata, subject);
+      await setProgress(`📨 正在发送到 Kindle...\n📖 ${bookInfo.title} — ${bookInfo.author}`);
+    } else {
+      await setProgress('📨 正在发送到 Kindle...');
+    }
+  }
+
+  try {
+    await sendToKindle({
+      subject,
+      text: message.caption || 'Forwarded from Telegram',
+      attachments: [attachment],
+    });
+  } catch (err) {
+    console.error('[Telegram] SMTP send failed', err);
+    await setProgress('❌ 发送到 Kindle 失败（SMTP 错误），请检查邮箱配置');
+    return;
+  }
+
+  if (bookInfo) {
+    await setProgress(`📤 已发送到 Kindle ✅\n📖 ${bookInfo.title} — ${bookInfo.author}`);
+  } else {
+    await setProgress('📤 已发送到 Kindle ✅');
   }
 }
 
