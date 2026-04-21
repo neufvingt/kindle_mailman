@@ -3,7 +3,21 @@
     "allow": [
       "Bash(git init:*)",
       "Bash(git config:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git remote:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)",
+      "Bash(npm list:*)",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(xxd \"D:/Users/zhang/Downloads/kindle_mailman-main/app/api/telegram/route.ts\")",
+      "mcp__context7__resolve-library-id",
+      "Bash(npx eslint *)",
+      "Bash(npm uninstall *)",
+      "Bash(npx next *)"
     ]
   }
 }
