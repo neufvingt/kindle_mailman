@@ -9,6 +9,20 @@ export const runtime = 'nodejs';
 // Telegram bot API can download files up to 20MB via standard API.
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
+// Short-term dedup for Telegram webhook retries (same update_id re-delivered).
+const UPDATE_DEDUP_TTL_MS = 10 * 60 * 1000;
+const recentUpdateIds = new Map<number, number>();
+
+function isDuplicateUpdate(updateId: number): boolean {
+  const now = Date.now();
+  for (const [id, expiry] of recentUpdateIds) {
+    if (expiry < now) recentUpdateIds.delete(id);
+  }
+  if (recentUpdateIds.has(updateId)) return true;
+  recentUpdateIds.set(updateId, now + UPDATE_DEDUP_TTL_MS);
+  return false;
+}
+
 // In-memory settings storage (resets on server restart, default: enabled)
 const chatSettings = new Map<string, { cleanFilename: boolean }>();
 
@@ -186,6 +200,13 @@ export async function POST(request: Request) {
 
   if (!message) {
     return NextResponse.json({ ok: true, ignored: true });
+  }
+
+  // Dedup webhook retries: Telegram re-delivers the same update_id if our
+  // prior response timed out. Skip processing to avoid duplicate Kindle sends.
+  if (isDuplicateUpdate(update.update_id)) {
+    console.log(`[Telegram] Duplicate update_id ${update.update_id}, ignoring`);
+    return NextResponse.json({ ok: true, duplicate: true });
   }
 
   // Owner gate: only process messages from the configured owner when set.

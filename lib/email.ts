@@ -46,12 +46,14 @@ export async function sendToKindle({ subject, text, attachments }: KindleEmailPa
   }
 
   const mailer = ensureTransporter();
+  const payload = { from, to, subject, text, attachments };
 
-  await mailer.sendMail({
-    from,
-    to,
-    subject,
-    text,
-    attachments,
-  });
+  try {
+    await mailer.sendMail(payload);
+  } catch (err) {
+    // One retry — transient SMTP errors (network blip, rate-limit) are common.
+    console.warn('[email] sendMail failed, retrying in 1s:', err instanceof Error ? err.message : err);
+    await new Promise((r) => setTimeout(r, 1000));
+    await mailer.sendMail(payload);
+  }
 }

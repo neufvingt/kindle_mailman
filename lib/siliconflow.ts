@@ -508,21 +508,28 @@ export async function updateEpubAuthor(epubBuffer: Buffer, author: string): Prom
   console.log(`[EPUB] Found OPF at: ${opfPath}`);
   const opfContent = await zip.file(opfPath)!.async('string');
 
+  const existingMatch = opfContent.match(/<dc:creator[^>]*>([^<]*)<\/dc:creator>/i);
+  if (!existingMatch) {
+    console.warn('[EPUB] No <dc:creator> found in OPF, skipping author update');
+    return epubBuffer;
+  }
+
+  const existingAuthor = decodeXmlEntities(existingMatch[1].trim());
+  if (existingAuthor === author.trim()) {
+    console.log(`[EPUB] Author already up-to-date ("${author}"), skipping re-zip`);
+    return epubBuffer;
+  }
+
   const safeAuthor = xmlEscape(author);
   const updatedOpf = opfContent.replace(
     /<dc:creator([^>]*)>[^<]*<\/dc:creator>/i,
     (_match, attrs: string) => `<dc:creator${attrs}>${safeAuthor}</dc:creator>`,
   );
 
-  if (updatedOpf === opfContent) {
-    console.warn('[EPUB] No <dc:creator> found in OPF, skipping author update');
-    return epubBuffer;
-  }
-
   zip.file(opfPath, updatedOpf);
 
   const newBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-  console.log(`[EPUB] Author metadata updated to: "${author}"`);
+  console.log(`[EPUB] Author metadata updated: "${existingAuthor}" → "${author}"`);
   return newBuffer;
 }
 
