@@ -18,7 +18,8 @@
       "Bash(npx eslint *)",
       "Bash(npm uninstall *)",
       "Bash(npx next *)",
-      "Bash(git fetch *)"
+      "Bash(git fetch *)",
+      "Bash(git check-ignore *)"
     ]
   }
 }

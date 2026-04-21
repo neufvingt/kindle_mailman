@@ -16,7 +16,17 @@ function buildMarkdownName(title: string, attachmentName: string) {
   return `${base}.md`;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    console.error('[check-mail] CRON_SECRET not configured — endpoint disabled');
+    return NextResponse.json({ ok: false, error: 'endpoint disabled' }, { status: 503 });
+  }
+  const authHeader = request.headers.get('authorization');
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
+
   const inboxUser = process.env.BOT_INBOX_EMAIL;
   const trustedSender = process.env.TRUSTED_SENDER_EMAIL;
   const ownerChatId = process.env.OWNER_CHAT_ID;

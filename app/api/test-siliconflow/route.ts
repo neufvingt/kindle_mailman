@@ -3,6 +3,23 @@ import { NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 
 export async function GET(request: Request) {
+  const testSecret = process.env.TEST_SECRET;
+  if (!testSecret) {
+    return NextResponse.json(
+      { ok: false, error: 'TEST_SECRET not set — endpoint disabled' },
+      { status: 503 },
+    );
+  }
+
+  const url = new URL(request.url);
+  const provided =
+    url.searchParams.get('key') ??
+    request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ??
+    '';
+  if (provided !== testSecret) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
+
   const apiKey = process.env.SILICONFLOW_API_KEY;
   const model = process.env.SILICONFLOW_MODEL || 'deepseek-ai/DeepSeek-V3';
 
