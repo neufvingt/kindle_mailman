@@ -102,6 +102,18 @@ function cleanFilename(filename: string): string {
   return finalName + ext;
 }
 
+// Strip characters unsafe in filesystems / email attachment headers / Kindle.
+// AI output can include slashes, colons, newlines, etc. — sanitize before use.
+function sanitizeFilename(name: string): string {
+  const safe = name
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s._]+|[\s._]+$/g, '')
+    .slice(0, 200)
+    .trim();
+  return safe || 'document';
+}
+
 function buildSubject(message: TelegramMessage) {
   const user = message.from;
   const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim();
@@ -329,7 +341,7 @@ async function processAttachment(
     if (metadata) {
       bookInfo = { title: metadata.title, author: metadata.author };
       const ext = attachment.filename.split('.').pop();
-      attachment.filename = `${metadata.title}.${ext}`;
+      attachment.filename = `${sanitizeFilename(metadata.title)}.${ext}`;
 
       if (ext === 'epub' && metadata.author && metadata.author !== 'Unknown') {
         try {

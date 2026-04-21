@@ -55,23 +55,3 @@ export async function sendToKindle({ subject, text, attachments }: KindleEmailPa
     attachments,
   });
 }
-
-type GeneralEmailPayload = KindleEmailPayload & { to: string };
-
-export async function sendEmail({ to, subject, text, attachments }: GeneralEmailPayload) {
-  const from = process.env.FROM_EMAIL;
-
-  if (!from) {
-    throw new Error('Missing FROM_EMAIL');
-  }
-
-  const mailer = ensureTransporter();
-
-  await mailer.sendMail({
-    from,
-    to,
-    subject,
-    text,
-    attachments,
-  });
-}

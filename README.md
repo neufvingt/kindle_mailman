@@ -4,22 +4,20 @@ Telegram webhook → Next.js API route on Vercel → SMTP email to your Kindle i
 
 ## Stack
 - Next.js (App Router) on Node runtime
-- Telegram Bot API via `undici`
+- Telegram Bot API via native `fetch`
 - SMTP email via `nodemailer`
+- Optional: SiliconFlow DeepSeek for AI book metadata extraction
 
 ## Environment
 Copy `.env.example` to `.env.local` and fill:
+
 ```
+# Telegram Bot (required)
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
-OWNER_CHAT_ID=
-BOT_INBOX_EMAIL=
-TRUSTED_SENDER_EMAIL=
-GMAIL_CLIENT_ID=
-GMAIL_CLIENT_SECRET=
-GMAIL_REFRESH_TOKEN=
-PROCESSED_LABEL_NAME=ProcessedByKindleBot
-OBSIDIAN_INBOX_EMAIL=
+OWNER_CHAT_ID=              # REQUIRED — only this chat can use the bot
+
+# Kindle / SMTP (required)
 KINDLE_EMAIL=
 FROM_EMAIL=
 SMTP_HOST=
@@ -27,25 +25,40 @@ SMTP_PORT=465
 SMTP_USER=
 SMTP_PASS=
 SMTP_SECURE=true
-SILICONFLOW_API_KEY=  # Optional: for AI book metadata extraction
+
+# SiliconFlow — optional (AI metadata extraction)
+SILICONFLOW_API_KEY=
+SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3.2
+
+# Admin endpoint auth
+TEST_SECRET=                # Required for /api/test-siliconflow (omit to disable)
 ```
 
-### AI Book Metadata Extraction (Optional)
-If you set `SILICONFLOW_API_KEY`, the bot will automatically extract book title and author from uploaded documents using DeepSeek AI. The extracted metadata will be used as the email subject when sending to Kindle.
+### Owner gating (important)
+`OWNER_CHAT_ID` must be set. Any message from a different chat is silently
+ignored. Without it, anyone who finds your bot can burn your SMTP / AI quota.
 
-Get your API key from [SiliconFlow](https://siliconflow.cn/).
+Find your chat id by messaging `@userinfobot` on Telegram.
 
-**Available environment variables:**
-- `SILICONFLOW_API_KEY` - Your SiliconFlow API key (required)
-- `SILICONFLOW_MODEL` - Model to use (optional, default: `deepseek-ai/DeepSeek-V3`)
+### AI Book Metadata Extraction (optional)
+If `SILICONFLOW_API_KEY` is set, the bot extracts book title + author (with
+nationality tag like `[美]`, `[日]`, `[韩]`) from the uploaded EPUB/MOBI and
+uses that as the email subject + renamed attachment. EPUB's internal
+`dc:creator` is also rewritten with the formatted author.
 
-**Supported models:**
-- `deepseek-ai/DeepSeek-V3` (default, recommended)
-- `deepseek-ai/DeepSeek-V2.5`
-- Other models available on SiliconFlow platform
+Get your key from [SiliconFlow](https://siliconflow.cn/).
 
-**Test the integration:**
-After deployment, visit `https://<your-vercel-domain>/api/test-siliconflow` to verify the API is working correctly.
+## Supported formats
+EPUB, MOBI, AZW, AZW3, DOCX, TXT, JPG, PNG. PDF is **not** supported (removed
+to keep cold start fast on Vercel Hobby).
+
+## Usage
+- `/start` — shows help.
+- `/send <text>` — forwards text to Kindle.
+- `/clean on|off` — toggle filename sanitization (strip brackets + source tags).
+- Send a file/photo — optional caption becomes email body.
+
+Progress is reported by editing a single message in place (no chat spam).
 
 ## Local development
 ```bash
@@ -54,33 +67,35 @@ npm run dev
 # webhook endpoint will be http://localhost:3000/api/telegram
 ```
 
-You can simulate Telegram by POSTing a sample update:
+Simulate Telegram locally:
 ```bash
 curl -X POST http://localhost:3000/api/telegram \
   -H "Content-Type: application/json" \
   -H "X-Telegram-Bot-Api-Secret-Token: $TELEGRAM_WEBHOOK_SECRET" \
-  -d '{"message":{"chat":{"id":123,"type":"private"},"text":"/send hello"}}'
+  -d '{"message":{"chat":{"id":YOUR_OWNER_CHAT_ID,"type":"private"},"text":"/send hello"}}'
 ```
 
 ## Deploy to Vercel
 1. Push to GitHub and connect the repo in Vercel.
-2. Set the env vars above in Vercel Project Settings → Environment Variables.
-3. Deploy. The webhook URL will be `https://<your-vercel-domain>/api/telegram`.
-4. Register the webhook with Telegram:
+2. Set all required env vars above in Project Settings → Environment Variables.
+3. Deploy. Webhook URL: `https://<your-domain>/api/telegram`.
+4. Register the webhook (paste in browser):
+   ```
+   https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://<your-domain>/api/telegram&secret_token=<TELEGRAM_WEBHOOK_SECRET>
+   ```
+   `{"ok":true,...}` means success.
+5. Verify:
+   ```
+   https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo
+   ```
+
+## Admin endpoint: `/api/test-siliconflow`
+Disabled when `TEST_SECRET` is unset. Otherwise:
 ```bash
-curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
-  -d "url=https://<your-vercel-domain>/api/telegram" \
-  -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
+curl "https://<your-domain>/api/test-siliconflow?key=$TEST_SECRET"
 ```
 
-## Gmail check (Vercel Cron)
-- Add a Vercel Cron job hitting `https://<your-vercel-domain>/api/check-mail`.
-- Gmail OAuth credentials: use a refresh token that can read the inbox configured in `BOT_INBOX_EMAIL`.
-- Only emails from `TRUSTED_SENDER_EMAIL` with `.html` attachments are processed. Others are logged and left untouched.
-- Matching emails are parsed to Markdown via `parseKindleHtml` + `kindleNotebookToMarkdown`, sent to Telegram (`OWNER_CHAT_ID`), and optionally emailed to `OBSIDIAN_INBOX_EMAIL`.
-- Processed messages are labeled with `PROCESSED_LABEL_NAME` (default `ProcessedByKindleBot`) and marked read.
-
-## Usage
-- `/start` — shows help.
-- `/send <text>` — forwards the text to your Kindle address via SMTP and replies with a confirmation.
-- Attachments — send a file/photo (Kindle-supported formats like PDF/EPUB/DOC/DOCX/RTF/TXT/JPG/PNG). Optional caption becomes the email body. Bot replies on success/failure.
+## Timeout note (Vercel Hobby)
+Attachment processing runs in `after()` (background) so Telegram gets an
+immediate 200. Total time still capped by `maxDuration` (10s on Hobby). If
+you hit this often, upgrade or shrink the AI preview.

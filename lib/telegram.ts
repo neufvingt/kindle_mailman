@@ -57,59 +57,6 @@ export async function editMessageText(
   });
 }
 
-type DocumentPayload = {
-  filename: string;
-  content: Buffer | string;
-  contentType?: string;
-  caption?: string;
-};
-
-export async function sendDocument(chatId: number | string, document: DocumentPayload) {
-  if (!API_BASE) {
-    throw new Error('Missing TELEGRAM_BOT_TOKEN');
-  }
-
-  const form = new FormData();
-  form.append('chat_id', chatId.toString());
-
-  if (document.caption) {
-    form.append('caption', document.caption);
-  }
-
-  const buffer =
-    typeof document.content === 'string' ? Buffer.from(document.content, 'utf8') : document.content;
-
-  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
-  const copy = new Uint8Array(arrayBuffer);
-  copy.set(buffer);
-
-  // filename is required by Telegram to treat it as a document
-  form.append(
-    'document',
-    new Blob([arrayBuffer], { type: document.contentType ?? 'application/octet-stream' }),
-    document.filename,
-  );
-
-  const response = await fetch(`${API_BASE}/sendDocument`, {
-    method: 'POST',
-    // Cast to any to satisfy TS; runtime uses Node 18+ fetch with FormData support
-    body: form as any,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Telegram API sendDocument failed: ${response.status} ${errorText}`);
-  }
-
-  const data = (await response.json()) as TelegramApiResponse<unknown>;
-
-  if (!data.ok) {
-    throw new Error(`Telegram API sendDocument error: ${data.description ?? 'unknown error'}`);
-  }
-
-  return data.result;
-}
-
 type TelegramFile = {
   file_id: string;
   file_unique_id: string;
