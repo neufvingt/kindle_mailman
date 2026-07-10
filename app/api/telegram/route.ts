@@ -78,6 +78,23 @@ type TelegramUpdate = {
   edited_message?: TelegramMessage;
 };
 
+function getIncomingBookName(message: TelegramMessage): string {
+  if (message.document) {
+    return message.document.file_name ?? `document-${message.document.file_id}`;
+  }
+
+  if (message.photo?.length) {
+    return `photo-${message.photo[message.photo.length - 1].file_id}.jpg`;
+  }
+
+  return '未知文件';
+}
+
+function formatBookError(reason: string, bookName: string): string {
+  const displayName = bookName.replace(/\s+/g, ' ').trim().slice(0, 200) || '未知文件';
+  return `❌ ${reason}\n📖 出错书籍：${displayName}`;
+}
+
 function verifyWebhookSecret(request: Request) {
   const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
   if (!expected) return true;
@@ -227,7 +244,10 @@ export async function POST(request: Request) {
       try {
         await sendMessage(
           message.chat.id,
-          `❌ 文件 ${mb}MB 超过 Telegram bot ${limit}MB 下载上限，请压缩后再发`,
+          formatBookError(
+            `文件 ${mb}MB 超过 Telegram bot ${limit}MB 下载上限，请压缩后再发`,
+            getIncomingBookName(message),
+          ),
         );
       } catch (err) {
         console.error('[Telegram] size-limit notify failed', err);
@@ -250,7 +270,11 @@ export async function POST(request: Request) {
       } catch (err) {
         console.error('[Telegram] unhandled background error', err);
         try {
-          await editMessageText(message.chat.id, progressMsgId, '❌ 处理失败，请重试');
+          await editMessageText(
+            message.chat.id,
+            progressMsgId,
+            formatBookError('处理失败，请重试', getIncomingBookName(message)),
+          );
         } catch {
           /* noop */
         }
@@ -322,6 +346,7 @@ async function processAttachment(
   settings: { cleanFilename: boolean },
 ) {
   const chatId = message.chat.id;
+  let bookName = getIncomingBookName(message);
   const setProgress = async (text: string) => {
     try {
       await editMessageText(chatId, progressMsgId, text);
@@ -340,14 +365,16 @@ async function processAttachment(
     }
   } catch (err) {
     console.error('[Telegram] attachment download failed', err);
-    await setProgress('❌ 下载文件失败，请稍后重试');
+    await setProgress(formatBookError('下载文件失败，请稍后重试', bookName));
     return;
   }
 
   if (!attachment) {
-    await setProgress('❌ 未能解析附件');
+    await setProgress(formatBookError('未能解析附件', bookName));
     return;
   }
+
+  bookName = attachment.filename;
 
   let subject = buildSubject(message);
   let bookInfo: { title: string; author: string } | null = null;
@@ -361,6 +388,7 @@ async function processAttachment(
     );
     if (metadata) {
       bookInfo = { title: metadata.title, author: metadata.author };
+      bookName = metadata.title;
       const ext = attachment.filename.split('.').pop();
       attachment.filename = `${sanitizeFilename(metadata.title)}.${ext}`;
 
@@ -387,7 +415,9 @@ async function processAttachment(
     });
   } catch (err) {
     console.error('[Telegram] SMTP send failed', err);
-    await setProgress('❌ 发送到 Kindle 失败（SMTP 错误），请检查邮箱配置');
+    await setProgress(
+      formatBookError('发送到 Kindle 失败（SMTP 错误），请检查邮箱配置', bookName),
+    );
     return;
   }
 
