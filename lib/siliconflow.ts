@@ -45,13 +45,24 @@ const API_TIMEOUT_MS = 15000;
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
 
+// Reasoning models need enough output budget to produce the final content.
+const DEFAULT_MAX_TOKENS = parseInt(process.env.AI_MAX_TOKENS || '2048', 10);
+
+type SiliconFlowChoice = {
+  finish_reason?: string | null;
+  message?: {
+    content?: string | null;
+    reasoning_content?: string | null;
+  };
+};
+
 async function callSiliconFlowAPI(
   apiKey: string,
   messages: ChatMessage[],
   maxTokens: number,
   timeoutMs: number,
 ): Promise<string | null> {
-  const model = process.env.SILICONFLOW_MODEL || 'deepseek-ai/DeepSeek-V3';
+  const model = process.env.SILICONFLOW_MODEL || 'deepseek-ai/DeepSeek-V3.2';
 
   try {
     const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
@@ -75,8 +86,19 @@ async function callSiliconFlowAPI(
       return null;
     }
 
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() ?? null;
+    const data = (await response.json()) as { choices?: SiliconFlowChoice[] };
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content?.trim();
+    if (!content) {
+      const finishReason = choice?.finish_reason || 'unknown';
+      const reasoningChars = choice?.message?.reasoning_content?.length || 0;
+      console.error(
+        `[SiliconFlow] empty content (finish_reason=${finishReason}, reasoning_chars=${reasoningChars}, max_tokens=${maxTokens})`,
+      );
+      return null;
+    }
+
+    return content;
   } catch (error) {
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
       console.error(`[SiliconFlow] API call timed out after ${timeoutMs}ms`);
@@ -166,7 +188,7 @@ Return ONLY a JSON object with "title" and "author" fields. If you cannot determ
           content: `Extract the book title and author from this text:\n\nFilename: ${filename}\n\nContent preview:\n${textPreview}\n\nReturn JSON only.`,
         },
       ],
-      200,
+      DEFAULT_MAX_TOKENS,
       API_TIMEOUT_MS,
     );
 
@@ -217,7 +239,7 @@ Return ONLY JSON: {"title": "...", "author": "..."}. If unclear, return empty st
           content: `Filename: ${filename}`,
         },
       ],
-      150,
+      DEFAULT_MAX_TOKENS,
       API_TIMEOUT_MS,
     );
 

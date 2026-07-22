@@ -21,7 +21,8 @@ export async function GET(request: Request) {
   }
 
   const apiKey = process.env.SILICONFLOW_API_KEY;
-  const model = process.env.SILICONFLOW_MODEL || 'deepseek-ai/DeepSeek-V3';
+  const model = process.env.SILICONFLOW_MODEL || 'deepseek-ai/DeepSeek-V3.2';
+  const maxTokens = parseInt(process.env.AI_MAX_TOKENS || '2048', 10);
 
   if (!apiKey) {
     return NextResponse.json({
@@ -54,7 +55,7 @@ export async function GET(request: Request) {
           }
         ],
         temperature: 0.1,
-        max_tokens: 150,
+        max_tokens: maxTokens,
       }),
     });
 
@@ -68,15 +69,38 @@ export async function GET(request: Request) {
       }, { status: 500 });
     }
 
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content?.trim();
+    const data = (await response.json()) as {
+      choices?: {
+        finish_reason?: string | null;
+        message?: { content?: string | null; reasoning_content?: string | null };
+      }[];
+    };
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content?.trim() ?? null;
+    if (!content) {
+      const finishReason = choice?.finish_reason || 'unknown';
+      const reasoningChars = choice?.message?.reasoning_content?.length || 0;
+      return NextResponse.json({
+        ok: false,
+        error: 'empty content',
+        message: `empty content (finish_reason=${finishReason}, reasoning_chars=${reasoningChars}, max_tokens=${maxTokens})`,
+        model,
+        finishReason,
+        reasoningChars,
+        maxTokens,
+        parsedData: data,
+      }, { status: 502 });
+    }
 
     return NextResponse.json({
       ok: true,
       message: 'SiliconFlow API is working',
       model,
+      maxTokens,
       testFilename,
       apiResponse: content,
+      finishReason: choice?.finish_reason ?? null,
+      reasoningChars: choice?.message?.reasoning_content?.length || 0,
       parsedData: data
     });
 
