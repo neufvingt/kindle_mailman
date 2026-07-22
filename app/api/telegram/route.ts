@@ -2,7 +2,7 @@ import { NextResponse, after } from 'next/server';
 import { downloadFile, editMessageText, getFile, sendMessage } from '@/lib/telegram';
 import { parseCommand } from '@/lib/commands';
 import { sendToKindle } from '@/lib/email';
-import { extractBookMetadata, formatBookSubject, updateEpubAuthor } from '@/lib/siliconflow';
+import { extractBookMetadata, formatBookSubject, updateEpubAuthor, zeroEpubParagraphSpacing } from '@/lib/siliconflow';
 
 export const runtime = 'nodejs';
 
@@ -404,6 +404,17 @@ async function processAttachment(
       await setProgress(`📨 正在发送到 Kindle...\n📖 ${bookInfo.title} — ${bookInfo.author}`);
     } else {
       await setProgress('📨 正在发送到 Kindle...');
+    }
+  }
+
+  const isEpub =
+    attachment.filename.toLowerCase().endsWith('.epub') ||
+    attachment.contentType?.toLowerCase().includes('epub');
+  if (isEpub) {
+    try {
+      attachment.content = await zeroEpubParagraphSpacing(attachment.content);
+    } catch (err) {
+      console.error('[Telegram] EPUB paragraph spacing update failed (continuing)', err);
     }
   }
 

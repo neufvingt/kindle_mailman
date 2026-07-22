@@ -555,6 +555,106 @@ export async function updateEpubAuthor(epubBuffer: Buffer, author: string): Prom
   return newBuffer;
 }
 
+const INJECTED_CSS_START = '/* Kindle Mailman injected styles start */';
+const INJECTED_CSS_END = '/* Kindle Mailman injected styles end */';
+const INJECTED_STYLE_TAG_PATTERN =
+  /<style[^>]*data-kindle-mailman=["']injected["'][^>]*>[\s\S]*?<\/style>\s*/i;
+
+const ZERO_PARAGRAPH_SPACING_CSS = `${INJECTED_CSS_START}
+p:not([class*="title"]):not([class*="heading"]):not([class*="chapter"]):not([class*="h1"]):not([class*="h2"]):not([class*="h3"]) {
+  margin: 0 0 0 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+${INJECTED_CSS_END}
+`;
+
+const ZERO_PARAGRAPH_SPACING_STYLE_TAG = `<style type="text/css" data-kindle-mailman="injected">
+${ZERO_PARAGRAPH_SPACING_CSS}
+</style>`;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripInjectedCssBlock(css: string): string {
+  const blockPattern = new RegExp(
+    `${escapeRegExp(INJECTED_CSS_START)}[\\s\\S]*?${escapeRegExp(INJECTED_CSS_END)}\\s*`,
+    'g',
+  );
+  return css.replace(blockPattern, '').trimEnd();
+}
+
+function injectZeroParagraphSpacingCss(css: string): string {
+  return `${stripInjectedCssBlock(css)}\n${ZERO_PARAGRAPH_SPACING_CSS}`;
+}
+
+function injectZeroParagraphSpacingHtml(html: string): string {
+  if (INJECTED_STYLE_TAG_PATTERN.test(html)) {
+    return html.replace(INJECTED_STYLE_TAG_PATTERN, `${ZERO_PARAGRAPH_SPACING_STYLE_TAG}\n`);
+  }
+
+  if (html.includes('</head>')) {
+    return html.replace('</head>', `${ZERO_PARAGRAPH_SPACING_STYLE_TAG}\n</head>`);
+  }
+
+  if (html.includes('<body')) {
+    return html.replace('<body', `${ZERO_PARAGRAPH_SPACING_STYLE_TAG}\n<body`);
+  }
+
+  return `${ZERO_PARAGRAPH_SPACING_STYLE_TAG}\n${html}`;
+}
+
+/**
+ * Force paragraph spacing to 0 so Kindle renders tighter body text.
+ * Injects into CSS files and HTML/XHTML heads; idempotent on re-runs.
+ */
+export async function zeroEpubParagraphSpacing(epubBuffer: Buffer): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(epubBuffer);
+  let changed = 0;
+
+  const cssFiles = Object.keys(zip.files).filter(
+    (name) => name.toLowerCase().endsWith('.css') && !zip.files[name].dir,
+  );
+  for (const cssFile of cssFiles) {
+    const original = await zip.files[cssFile].async('string');
+    const updated = injectZeroParagraphSpacingCss(original);
+    if (updated !== original) {
+      zip.file(cssFile, updated);
+      changed += 1;
+    }
+  }
+
+  const htmlFiles = Object.keys(zip.files).filter((name) => {
+    const lower = name.toLowerCase();
+    return (
+      (lower.endsWith('.xhtml') || lower.endsWith('.html') || lower.endsWith('.htm')) &&
+      !zip.files[name].dir
+    );
+  });
+  for (const htmlFile of htmlFiles) {
+    const original = await zip.files[htmlFile].async('string');
+    const updated = injectZeroParagraphSpacingHtml(original);
+    if (updated !== original) {
+      zip.file(htmlFile, updated);
+      changed += 1;
+    }
+  }
+
+  if (changed === 0) {
+    console.log('[EPUB] Paragraph spacing already zeroed or no style/html targets found');
+    return epubBuffer;
+  }
+
+  const newBuffer = await zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 },
+  });
+  console.log(`[EPUB] Paragraph spacing set to 0 (${changed} file(s) updated)`);
+  return newBuffer;
+}
+
 export function formatBookSubject(metadata: BookMetadata | null, fallback: string): string {
   if (!metadata || !metadata.title) {
     console.log('[SiliconFlow] Using fallback subject:', fallback);
